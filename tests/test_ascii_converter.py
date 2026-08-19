@@ -1,5 +1,6 @@
 """Tests de la conversion pure image -> ASCII (numpy + Pillow, pas d'OpenCV)."""
 
+import re
 import sys
 from pathlib import Path
 
@@ -13,10 +14,13 @@ from src.ascii_converter import (  # noqa: E402
     frame_to_ansi,
     frame_to_ascii,
     render_ascii_to_image,
+    render_frame_to_image,
     resize_nearest,
     stretch_contrast,
     to_grayscale,
 )
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _solid_bgr(height: int, width: int, bgr: tuple[int, int, int]) -> np.ndarray:
@@ -165,3 +169,89 @@ def test_render_ascii_to_image_handles_empty_text():
     image = render_ascii_to_image("")
     assert image.width > 0
     assert image.height > 0
+
+
+def test_render_frame_to_image_uses_original_pixel_colors():
+    # Gauche = rouge, droite = bleu ; charset sans espace pour garantir un
+    # glyphe visible sur chaque cellule.
+    frame = _solid_bgr(4, 4, (0, 0, 255))
+    frame[:, 2:] = (255, 0, 0)
+
+    image = render_frame_to_image(
+        frame, width=4, charset="@@", colored=True, background=(0, 0, 0)
+    )
+    arr = np.array(image).astype(int)
+    left_half = arr[:, : arr.shape[1] // 2]
+    right_half = arr[:, arr.shape[1] // 2 :]
+
+    assert (left_half[..., 0] - left_half[..., 2]).max() > 50  # rouge (R>B) à gauche
+    assert (right_half[..., 2] - right_half[..., 0]).max() > 50  # bleu (B>R) à droite
+
+
+def test_render_frame_to_image_monochrome_ignores_pixel_color():
+    frame = _solid_bgr(4, 4, (0, 0, 255))
+    frame[:, 2:] = (255, 0, 0)
+
+    image = render_frame_to_image(
+        frame, width=4, charset="@@", colored=False, foreground=(9, 9, 9), background=(0, 0, 0)
+    )
+    arr = np.array(image)
+    # Aucune couleur d'origine (rouge/bleu) ne doit transparaître : seules des
+    # nuances de gris entre le fond et l'avant-plan (l'anticrénelage de la
+    # police peut mélanger les deux), jamais de teinte rouge ou bleue.
+    assert (arr[..., 0] == arr[..., 1]).all()
+    assert (arr[..., 1] == arr[..., 2]).all()
+
+
+def test_render_frame_to_image_rejects_grayscale_when_colored():
+    gray = np.zeros((4, 4), dtype=np.uint8)
+    with pytest.raises(ValueError):
+        render_frame_to_image(gray, width=4, colored=True)
+
+
+def test_render_frame_to_image_has_positive_dimensions():
+    frame = _solid_bgr(8, 8, (0, 0, 0))
+    image = render_frame_to_image(frame, width=6, char_aspect=0.5, colored=False)
+    assert image.width > 0
+    assert image.height > 0
+
+
+# -- Régression : les pixels saturés/lumineux ne doivent jamais devenir
+# -- invisibles en rendu couleur (l'espace, mappé aux luminances les plus
+# -- hautes, ne dessine rien même avec une couleur de remplissage -- un blanc
+# -- ou un vert/rouge/bleu pur a une luminance perçue élevée mais reste un
+# -- pixel important à afficher).
+
+
+def test_frame_to_ansi_bright_pixel_is_not_an_invisible_space():
+    frame = _solid_bgr(4, 4, (255, 255, 255))  # blanc pur -> luminance max
+    text = frame_to_ansi(frame, width=4, charset="@%#*+=-:. ")
+    stripped = _ANSI_RE.sub("", text).replace("\n", "")
+    assert set(stripped) != {" "}
+
+
+def test_frame_to_ansi_saturated_green_pixel_is_not_an_invisible_space():
+    frame = _solid_bgr(4, 4, (0, 255, 0))  # vert pur (BGR) -> luminance perçue élevée
+    text = frame_to_ansi(frame, width=4, charset="@%#*+=-:. ", normalize=True)
+    stripped = _ANSI_RE.sub("", text).replace("\n", "")
+    assert set(stripped) != {" "}
+
+
+def test_render_frame_to_image_bright_pixel_still_produces_ink():
+    frame = _solid_bgr(4, 4, (255, 255, 255))  # blanc pur
+    image = render_frame_to_image(frame, width=4, colored=True, background=(0, 0, 0))
+    arr = np.array(image)
+    assert arr.max() > 0  # pas une image entièrement noire
+
+
+def test_render_frame_to_image_saturated_color_on_dark_background_is_visible():
+    # Reproduit le cas réel : petite zone très saturée sur un fond sombre
+    # (ex. un objet coloré filmé dans une pièce peu éclairée).
+    frame = _solid_bgr(6, 6, (20, 10, 5))
+    frame[2:4, 2:4] = (0, 255, 0)  # vert pur (BGR)
+
+    image = render_frame_to_image(
+        frame, width=6, colored=True, normalize=True, background=(0, 0, 0)
+    )
+    arr = np.array(image).astype(int)
+    assert (arr[..., 1] - arr[..., 0]).max() > 50  # de l'encre verte (G > R) quelque part
