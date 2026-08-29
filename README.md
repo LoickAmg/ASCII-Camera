@@ -125,3 +125,9 @@ son comportement d'origine, où l'espace reste un vrai "blanc").
 
 - Barre de progression plus précise pour `--export-video` (temps restant estimé)
 - Conteneuriser avec Docker (voir le projet transversal #25 de la roadmap)
+
+## Compatibilité et limites
+
+La conversion pure est portable, mais la capture webcam et l’export vidéo dépendent d’OpenCV, des codecs disponibles et des permissions de la caméra du système. La webcam est attendue comme périphérique local ; un environnement CI doit donc tester les images fixtures et non ouvrir une caméra réelle. Pour une démonstration reproductible, utiliser une image ou une courte vidéo libre de droits, conserver les paramètres (`--width`, `--charset`, `--color`, `--fps`) et comparer le fichier de sortie plutôt que l’affichage d’un terminal particulier.
+
+Les caractères ANSI 24 bits nécessitent un terminal compatible et les vidéos larges sont coûteuses à rendre. Le projet ne promet pas une reconnaissance de scène : il convertit des luminances et des couleurs en caractères. Les fichiers média utilisés dans une capture doivent être attribués et ne doivent pas être ajoutés au dépôt sans licence explicite.
