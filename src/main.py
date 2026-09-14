@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import subprocess
 import sys
+import tempfile
 
 from .ascii_converter import ASCII_CHARS
 from .camera import convert_image_file, export_ascii_video, render_image_file, stream_webcam
@@ -15,6 +18,20 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
+
+
+def _open_preview(ascii_text: str, title: str = "ASCII Art") -> None:
+    """Écrit le texte ASCII dans un fichier temp et ouvre un nouveau terminal."""
+    # Écrire dans un fichier temporaire (UTF-8, sans ANSI pour compatibilité)
+    clean = _strip_ansi(ascii_text)
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", encoding="utf-8", delete=False
+    )
+    tmp.write(clean)
+    tmp.close()
+    # Ouvrir un nouveau cmd qui affiche le fichier puis attend un keypress
+    cmd = f'title {title} & type "{tmp.name}" & echo. & pause & del "{tmp.name}"'
+    subprocess.Popen(["cmd", "/c", cmd])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -89,6 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=12,
         help="Taille de police pour --render / --export-video.",
     )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Ouvre un nouveau terminal Windows avec le résultat ASCII (mode image uniquement).",
+    )
     return parser
 
 
@@ -141,6 +163,9 @@ def main(argv: list[str] | None = None) -> None:
         normalize=not args.no_normalize,
     )
     print(ascii_text)
+
+    if args.preview:
+        _open_preview(ascii_text, title=f"ASCII — {os.path.basename(args.source)}")
 
     if args.save:
         with open(args.save, "w", encoding="utf-8") as handle:
